@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Accessible Gamepad Typing</title>
+  <style>
+    body {
+      background: #444;
+      color: white;
+      font-family: sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    
+    h1, h2 {
+      text-align: center;
+    }
+    
+    #output-area {
+      background: #222;
+      color: #fff;
+      font-size: 24px;
+      min-height: 150px;
+      padding: 15px;
+      margin: 20px 0;
+      border-radius: 5px;
+      outline: none;
+    }
+    
+    #current-mode {
+      font-size: 20px;
+      text-align: center;
+      padding: 10px;
+      background: #333;
+      margin: 10px 0;
+      border-radius: 5px;
+    }
+    
+    #instructions {
+      background: #333;
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 20px;
+    }
+    
+    #letter-map {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin-top: 20px;
+    }
+    
+    .joystick-map {
+      background: #333;
+      padding: 15px;
+      border-radius: 5px;
+    }
+    
+    .joystick-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 5px;
+      text-align: center;
+    }
+    
+    .joystick-grid div {
+      padding: 10px;
+      background: #222;
+      border-radius: 3px;
+    }
+    
+    .center {
+      grid-column: 2;
+      grid-row: 2;
+    }
+    
+    .left {
+      grid-column: 1;
+      grid-row: 2;
+    }
+    
+    .right {
+      grid-column: 3;
+      grid-row: 2;
+    }
+    
+    .up {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    
+    .down {
+      grid-column: 2;
+      grid-row: 3;
+    }
+    
+    #connection-status {
+      text-align: center;
+      font-size: 18px;
+      margin: 10px 0;
+    }
+    
+    #debug {
+      font-family: monospace;
+      background: #222;
+      padding: 10px;
+      margin-top: 20px;
+      height: 100px;
+      overflow-y: auto;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Accessible Gamepad Typing System</h1>
+  <div id="connection-status">No gamepad connected</div>
+  
+  <div id="current-mode">Current Letter Group: A-H</div>
+  <div id="output-area" tabindex="0" role="textbox" aria-label="Typed text appears here"></div>
+  
+  <h2>Instructions</h2>
+  <div id="instructions">
+    <p>Use the left and right joysticks to select letters. Move the joystick in a direction to type the corresponding letter.</p>
+    <p>Press button 0 (typically A) to add a space.</p>
+    <p>Press button 1 (typically B) to delete the last character.</p>
+    <p>Press button 2 (typically X) to toggle between uppercase and lowercase.</p>
+    <p>Press button 3 (typically Y) to switch to the next letter group.</p>
+  </div>
+  
+  <div id="letter-map">
+    <div class="joystick-map">
+      <h3>Left Joystick (Group A-H)</h3>
+      <div class="joystick-grid">
+        <div class="up">↑ B</div>
+        <div class="left">← A</div>
+        <div class="center">• Space</div>
+        <div class="right">→ C</div>
+        <div class="down">↓ D</div>
+      </div>
+      
+      <h3>Right Joystick (Group E-H)</h3>
+      <div class="joystick-grid">
+        <div class="up">↑ F</div>
+        <div class="left">← E</div>
+        <div class="center">• Space</div>
+        <div class="right">→ G</div>
+        <div class="down">↓ H</div>
+      </div>
+    </div>
+    
+    <div class="joystick-map" id="next-group">
+      <h3>Left Joystick (Group I-P)</h3>
+      <div class="joystick-grid">
+        <div class="up">↑ J</div>
+        <div class="left">← I</div>
+        <div class="center">• Space</div>
+        <div class="right">→ K</div>
+        <div class="down">↓ L</div>
+      </div>
+      
+      <h3>Right Joystick (Group M-P)</h3>
+      <div class="joystick-grid">
+        <div class="up">↑ N</div>
+        <div class="left">← M</div>
+        <div class="center">• Space</div>
+        <div class="right">→ O</div>
+        <div class="down">↓ P</div>
+      </div>
+    </div>
+  </div>
+  
+  <div id="debug"></div>
+
+  <script>
+    // Configuration
+    const DEAD_ZONE = 0.5; // Joystick dead zone to prevent accidental inputs
+    const COOLDOWN_TIME = 300; // Reduced cooldown time for faster typing
+    
+    // State variables
+    let outputText = "";
+    let currentLetterGroup = 0; // 0: A-H, 1: I-P, 2: Q-X, 3: Y-Z + special chars
+    let isUpperCase = false;
+    let lastInputTime = 0;
+    let connectedGamepad = null;
+    let lastAxesValues = [0, 0, 0, 0]; // Track previous axes values
+    let buttonStates = []; // Track button states to detect changes
+    let activeOscillator = null; // Track current tone
+    
+    // DOM elements
+    const outputAreaElem = document.getElementById("output-area");
+    const currentModeElem = document.getElementById("current-mode");
+    const connectionStatusElem = document.getElementById("connection-status");
+    const debugElem = document.getElementById("debug");
+    
+    // Letter maps for different groups
+    const letterMaps = [
+      // Group 0: A-H
+      {
+        left: {
+          left: 'a', right: 'c', up: 'b', down: 'd', center: ' '
+        },
+        right: {
+          left: 'e', right: 'g', up: 'f', down: 'h', center: ' '
+        }
+      },
+      // Group 1: I-P
+      {
+        left: {
+          left: 'i', right: 'k', up: 'j', down: 'l', center: ' '
+        },
+        right: {
+          left: 'm', right: 'o', up: 'n', down: 'p', center: ' '
+        }
+      },
+      // Group 2: Q-X
+      {
+        left: {
+          left: 'q', right: 's', up: 'r', down: 't', center: ' '
+        },
+        right: {
+          left: 'u', right: 'w', up: 'v', down: 'x', center: ' '
+        }
+      },
+      // Group 3: Y-Z + symbols
+      {
+        left: {
+          left: 'y', right: '.', up: 'z', down: ',', center: ' '
+        },
+        right: {
+          left: '?', right: '!', up: "'", down: '-', center: ' '
+        }
+      }
+    ];
+    
+    // Get group name helper function
+    function getGroupName(groupIndex) {
+      switch(groupIndex) {
+        case 0: return "A-H"; 
+        case 1: return "I-P"; 
+        case 2: return "Q-X"; 
+        case 3: return "Y-Z and Symbols"; 
+        default: return "Unknown";
+      }
+    }
+    
+    // Audio feedback setup
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    
+    function stopAllAudio() {
+      // Cancel any ongoing speech
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      
+      // Stop any ongoing tone
+      if (activeOscillator) {
+        activeOscillator.stop();
+        activeOscillator = null;
+      }
+    }
+    
+    function playTone(frequency, duration) {
+      // Stop any ongoing audio
+      stopAllAudio();
+      
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      gainNode.gain.value = 0.3;
+      oscillator.start();
+      activeOscillator = oscillator;
+      
+      setTimeout(() => {
+        if (oscillator === activeOscillator) {
+          oscillator.stop();
+          activeOscillator = null;
+        }
+      }, duration);
+    }
+    
+    function speakText(text, priority = false) {
+      // If priority is false, don't interrupt existing speech for non-critical announcements
+      if (!priority && window.speechSynthesis.speaking) {
+        return;
+      }
+      
+      // Cancel existing speech
+      stopAllAudio();
+      
+      // Use the Web Speech API for screen reader functionality
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.2;
+      utterance.volume = 1.0;
+      
+      // Make it very short for quick feedback
+      if (text.length === 1) {
+        utterance.rate = 2.0; // Faster for single letters
+      }
+      
+      window.speechSynthesis.speak(utterance);
+    }
+    
+    function updateDisplay() {
+      outputAreaElem.textContent = outputText;
+      
+      // Update current mode display
+      const groupName = getGroupName(currentLetterGroup);
+      const caseStatus = isUpperCase ? "UPPERCASE" : "lowercase";
+      currentModeElem.textContent = `Current Letter Group: ${groupName} (${caseStatus})`;
+    }
+    
+    function handleJoystickInput(joystick, axes) {
+      const now = Date.now();
+      if (now - lastInputTime < COOLDOWN_TIME) {
+        return; // Still in cooldown period
+      }
+      
+      let direction = null;
+      let horizontal = axes[0];
+      let vertical = axes[1];
+      
+      if (joystick === 'right') {
+        horizontal = axes[2];
+        vertical = axes[3];
+      }
+      
+      // Detect joystick direction beyond dead zone
+      if (Math.abs(horizontal) > DEAD_ZONE || Math.abs(vertical) > DEAD_ZONE) {
+        if (Math.abs(horizontal) > Math.abs(vertical)) {
+          direction = horizontal > 0 ? 'right' : 'left';
+        } else {
+          direction = vertical > 0 ? 'down' : 'up';
+        }
+      } else {
+        // Center position
+        return;
+      }
+      
+      // Compare with previous state to detect new movements
+      const axesStartIndex = joystick === 'left' ? 0 : 2;
+      const prevHorizontal = lastAxesValues[axesStartIndex];
+      const prevVertical = lastAxesValues[axesStartIndex + 1];
+      
+      // Only process if there's a significant change in direction
+      if (Math.abs(horizontal - prevHorizontal) > 0.3 || Math.abs(vertical - prevVertical) > 0.3) {
+        let letter = '';
+        
+        // Get letter based on direction and current group
+        if (direction === 'left') {
+          letter = letterMaps[currentLetterGroup][joystick].left;
+        } else if (direction === 'right') {
+          letter = letterMaps[currentLetterGroup][joystick].right;
+        } else if (direction === 'up') {
+          letter = letterMaps[currentLetterGroup][joystick].up;
+        } else if (direction === 'down') {
+          letter = letterMaps[currentLetterGroup][joystick].down;
+        }
+        
+        // Apply case if needed
+        if (isUpperCase) {
+          letter = letter.toUpperCase();
+        }
+        
+        // Add letter to output
+        outputText += letter;
+        updateDisplay();
+        
+        // Play sound feedback
+        playTone(440, 80); // A4 note, shorter duration
+        
+        // Speak the letter with shorter feedback
+        speakText(letter);
+        
+        lastInputTime = now;
+        
+        // Debug
+        logDebug(`Added: ${letter} (${joystick} stick, ${direction})`);
+      }
+      
+      // Update last values
+      if (joystick === 'left') {
+        lastAxesValues[0] = horizontal;
+        lastAxesValues[1] = vertical;
+      } else {
+        lastAxesValues[2] = horizontal;
+        lastAxesValues[3] = vertical;
+      }
+    }
+    
+    function handleButtonPress(buttonIndex, pressed) {
+      // Only process on button press (not release)
+      if (!pressed || buttonStates[buttonIndex] === pressed) {
+        buttonStates[buttonIndex] = pressed;
+        return;
+      }
+      
+      buttonStates[buttonIndex] = pressed;
+      const now = Date.now();
+      
+      // Different actions based on button
+      switch(buttonIndex) {
+        case 0: // Add space
+          outputText += ' ';
+          playTone(330, 80); // E4 note
+          speakText("space");
+          break;
+        
+        case 1: // Delete last character
+          if (outputText.length > 0) {
+            const deletedChar = outputText.slice(-1);
+            outputText = outputText.slice(0, -1);
+            playTone(294, 80); // D4 note
+            speakText("deleted " + (deletedChar === ' ' ? "space" : deletedChar));
+          } else {
+            playTone(800, 200); // Error tone
+            speakText("empty");
+          }
+          break;
+        
+        case 2: // Toggle case
+          isUpperCase = !isUpperCase;
+          playTone(392, 100); // G4 note
+          speakText(isUpperCase ? "uppercase" : "lowercase", true);
+          break;
+        
+        case 3: // Switch letter group
+          // Get the NEXT group name BEFORE updating the current group
+          const nextGroupIndex = (currentLetterGroup + 1) % letterMaps.length;
+          const nextGroupName = getGroupName(nextGroupIndex);
+          
+          // Update the group
+          currentLetterGroup = nextGroupIndex;
+          
+          // Play tone
+          playTone(523, 150); // C5 note
+          
+          // Announce the NEW group name
+          speakText(`Switched to ${nextGroupName}`, true);
+          
+          // Update the display
+          updateDisplay();
+          break;
+        
+        // Additional buttons could be used for other functions
+        case 4: // Read current text
+          if (outputText) {
+            speakText(outputText, true);
+          } else {
+            speakText("No text entered", true);
+          }
+          break;
+          
+        case 5: // Clear all text
+          if (outputText) {
+            speakText("Text cleared", true);
+            outputText = "";
+          }
+          break;
+      }
+      
+      lastInputTime = now;
+      updateDisplay();
+      logDebug(`Button ${buttonIndex} pressed`);
+    }
+    
+    function logDebug(message) {
+      const timestamp = new Date().toLocaleTimeString();
+      debugElem.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+      debugElem.scrollTop = debugElem.scrollHeight;
+    }
+    
+    function pollGamepads() {
+      const gamepads = navigator.getGamepads();
+      let gamepadConnected = false;
+      
+      for (let i = 0; i < gamepads.length; i++) {
+        const gamepad = gamepads[i];
+        if (gamepad) {
+          gamepadConnected = true;
+          connectedGamepad = gamepad;
+          
+          // Process joystick inputs
+          handleJoystickInput('left', gamepad.axes);
+          handleJoystickInput('right', gamepad.axes);
+          
+          // Process button inputs
+          for (let j = 0; j < gamepad.buttons.length; j++) {
+            handleButtonPress(j, gamepad.buttons[j].pressed);
+          }
+          
+          break;
+        }
+      }
+      
+      // Update connection status
+      if (gamepadConnected) {
+        connectionStatusElem.textContent = `Gamepad connected: ${connectedGamepad.id}`;
+        connectionStatusElem.style.color = "#4CAF50";
+      } else {
+        connectionStatusElem.textContent = "No gamepad connected. Please connect a controller and press any button.";
+        connectionStatusElem.style.color = "#F44336";
+        connectedGamepad = null;
+      }
+      
+      requestAnimationFrame(pollGamepads);
+    }
+    
+    // Initialize
+    function init() {
+      // Welcome message
+      speakText("Welcome to the Accessible Gamepad Typing System. Connect a gamepad to begin.", true);
+      
+      // Set up button event listeners
+      window.addEventListener("gamepadconnected", (event) => {
+        logDebug(`Gamepad connected: ${event.gamepad.id}`);
+        speakText("Gamepad connected. You can now begin typing.", true);
+        
+        // Initialize buttonStates array
+        connectedGamepad = event.gamepad;
+        buttonStates = new Array(connectedGamepad.buttons.length).fill(false);
+      });
+      
+      window.addEventListener("gamepaddisconnected", (event) => {
+        logDebug(`Gamepad disconnected: ${event.gamepad.id}`);
+        speakText("Gamepad disconnected.", true);
+        connectedGamepad = null;
+      });
+      
+      // Initial display update
+      updateDisplay();
+      
+      // Start polling for gamepad input
+      requestAnimationFrame(pollGamepads);
+    }
+    
+    // Start the application
+    init();
+  </script>
+</body>
+</html>
